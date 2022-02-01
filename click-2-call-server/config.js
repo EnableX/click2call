@@ -18,18 +18,18 @@ var config = {};
 
 config.SERVER_API_SERVER = {
   host:
-    "api-qa.enablex.io" /* Server API URL. Change it to connect to right EnableX Cluster */,
+    "api.enablex.io" /* Server API URL. Change it to connect to right EnableX Cluster */,
   port: "443",
   /* Server API Port. */
 };
 
-config.APP_ID = "6040d1f0e865dc74ac6ac113"; //"6012177366004d40c01913e2"; // "5b289848b0445b59155bf432";	            /* APP ID - Use APP ID received from Enablex */
-config.APP_KEY = "yueVeqaGaDeuurygaQaguVa9uXeDyXy5eNyV"; //"UaXetamyMyduAauyMugegeaeTa6a4yvyHere"; //"2e9etaYamyPaXaXyJyHaeyLe4yeyLeHaeena";	/* APP KEY - Use APP KEY received from Enablex */
+config.APP_ID = ""; // 	            /* APP ID - Use APP ID received from Enablex */
+config.APP_KEY = ""; 	/* APP KEY - Use APP KEY received from Enablex */
 
 
 config.cert = {
-  key: "/opt/vcloudx/etc/sslcerts/vcloudx.key",
-  crt: "/opt/vcloudx/etc/sslcerts/vcloudx.crt",
+  key: "", // Your KEY file path
+  crt: "", // Your CRT file path
   caBundle: null,
 };
 
@@ -44,7 +44,7 @@ config.logger = {
     app: {
       type: "file",
       filename:
-        "/var/www/vhosts/saas-portal-shivam.vcloudx.com/logs/vcxapps/ccenterApp/app.log",
+        "", // path of the file where you want to store the logs 
       layout: {
         type: "pattern",
         pattern:

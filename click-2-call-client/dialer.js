@@ -12,24 +12,23 @@ class EnxDialer extends EventEmitter {
     //this.connectServer(params);
   };
 
-	init() {
-		let socket_opt = {
-			reconnection: true,
+  init(websocketurl) {
+    let socket_opt = {
+      reconnection: true,
       reconnectionAttempts: 10,
       forceNew: true,
       transports: ["websocket"],
       pingInterval: 25000,
       pingTimeout: 600000,
-		}
-		//var transport = [];
-		//transport.push(param.transport);
-		console.log("Connecting to Server");
-//		that.socket = io.connect(param.host, {transports: transport, reconnect : param.reconnect , secure : param.secure , rejectUnauthorized : param.rejectUnauthorized} );
-		that.socket = io.connect('https://localhost:8444',  {transports: ["websocket"], reconnect: true, secure: true, rejectUnauthorized: false}		 );	
-		that.socket.on('connect', function(socket) {
-			console.log("Connected to Server");			
-		});
-	}
+    }
+    //var transport = [];
+    //transport.push(param.transport);
+    console.log("Connecting to Server");
+    //that.socket = io.connect(param.host, {transports: transport, reconnect : param.reconnect , secure : param.secure , rejectUnauthorized : param.rejectUnauthorized} );
+    that.socket = io.connect(websocketurl, {transports: ["websocket"], reconnect: true, secure: true, rejectUnauthorized: false}		 );	that.socket.on('connect', function(socket) {
+      console.log("Connected to Server");			
+    });
+  }
   
   login(params) {
 		that.socket.emit('user-logged-in', params, (response) => {
@@ -46,9 +45,9 @@ class EnxDialer extends EventEmitter {
 		/*
 		* Handle Events
 		*/
-		handleVoiceEvents() {
-			 that.socket.on("callstateevent", function (data) {
-        console.log(data, "callstateevents");
+     handleVoiceEvents() {
+	that.socket.on("callstateevent", function (data) {
+        console.log(" handle callstateevents " + JSON.stringify(data));
         console.log("State: " + that.state);
         if(data.state === 'incomingcall') {
           that.acceptCall(data.voice_id , (response) => {
@@ -79,7 +78,9 @@ class EnxDialer extends EventEmitter {
              that.emit('room_connected', data);
         } else {
           console.log("Invalid state received on the call state events");
-          that.disconnectCall(data.voice_id);
+          /*that.disconnectCall(data.voice_id,(response) => {
+	    console.log(`Disconnect Call Response ${response}`);
+	  });*/
         }
       });
 		
@@ -88,23 +89,105 @@ class EnxDialer extends EventEmitter {
 		/*
     * Make an outbound call.
     */
-    connectCall(params, callback) {
+    connectCall(appid , appkey , voice_id, params, callback) {
       that.state = 'dialing';
       that.socket.emit("connect-call", {
-        from: params.from,
-        to: params.to,
-        room:params.room}, (response) => {
+	appid : appid,
+	appkey : appkey,
+        voice_id : voice_id,	
+	connect_param : params }, (response) => {
           console.log("Received response", JSON.stringify(response));
           if(callback) callback(response);
      });
-      that.state = 'dialing'
+     that.state = 'dialing'
     };
+
+   connectBroadCastCall(appid , appkey , broadcast_id, voice_id, params, callback) {
+      that.state = 'dialing';
+      that.socket.emit("connect-broadcast-call", {
+        appid : appid,
+        appkey : appkey,
+	broadcast_id : broadcast_id,
+        voice_id : voice_id,
+        connect_param : params }, (response) => {
+          console.log("Received response", JSON.stringify(response));
+          if(callback) callback(response);
+     });
+     that.state = 'dialing'
+    };
+
+    makeOutboundCall(appid , appkey , params , callback ) {
+      that.state = 'dialing';
+      that.socket.emit('outbound-call', { 
+        appid : appid,
+        appkey : appkey, 
+        call_param : params }, (response) => { 
+        console.log("Received response", JSON.stringify(response));
+        if(callback) 
+	callback(response);
+      })
+    };
+
+    makeBroadcastCall(appid , appkey , params , callback ) {
+      that.state = 'dialing';
+      that.socket.emit('broadcast-call', {
+        appid : appid,
+        appkey : appkey,
+        broadcast_param : params }, (response) => {
+        console.log("Received response", JSON.stringify(response));
+        if(callback)
+        callback(response);
+      })
+    };
+
+    playIVR(appid, appkey, voice_id, params,callback) {
+      that.state = 'connected';
+      that.playstate = 'initiated'
+      that.socket.emit('play-ivr', {
+        appid : appid,
+        appkey : appkey,
+	voice_id : voice_id,
+        play_param : params }, (response) => {
+        console.log("Received response", JSON.stringify(response));
+        if(callback)
+          callback(response);
+      })
+    }
+
+    joinRoom(appid, appkey, voice_id, room_id, params,callback) {
+      that.state = 'connected';
+      that.playstate = 'initiated'
+      that.socket.emit('join-room', {
+        appid : appid,
+        appkey : appkey,
+        voice_id : voice_id,
+	room_id : room_id}, (response) => {
+        console.log("Received response", JSON.stringify(response));
+        if(callback)
+          callback(response);
+      })
+    }
+
+    playBroadCastIVR(appid, appkey, broadcast_id , voice_id, params,callback) {
+      that.state = 'connected';
+      that.playstate = 'initiated'
+      that.socket.emit('play-broadcast-ivr', {
+        appid : appid,
+        appkey : appkey,
+        broadcast_id : broadcast_id,
+        voice_id : voice_id,
+        play_param : params }, (response) => {
+        console.log("Received response", JSON.stringify(response));
+        if(callback)
+          callback(response);
+      })
+    }
+ 
+    /*
+      Hold Call
+    */
 		
-		/*
-		*	Hold Call
-		*/
-		
-		holdCall(voiceId, callback) {
+    holdCall(voiceId, callback) {
       that.state = 'connected';
       that.socket.emit("hold-call", {voice_id: voiceId}, (response) => {
           console.log("Received response", JSON.stringify(response));
@@ -137,23 +220,38 @@ class EnxDialer extends EventEmitter {
     /*
     * Disconnecting the call
     */
-    disconnectCall(voiceId, callback) {
-      let eventName;
+    disconnectCall(appid, appkey, voiceId, callback) {
+      /*let eventName;
       if(that.state === 'dialing') {
         eventName = 'cancel-call';
       } else if(that.state === 'connected' || that.state === 'established') {
         eventName = 'disconnect-call';
       } else if(that.state === 'incomingcall') {
         eventName = 'reject-call'
-      }
-      that.socket.emit(eventName, {voice_id:voiceId}, (response) => {
+      }*/
+      that.socket.emit('disconnect-call', {appid : appid, appkey : appkey, voice_id : voiceId}, (response) => {
         console.log("Received response", JSON.stringify(response));
         callback(response);
       });
-      that.state = 'online';
+      //that.state = 'online';
     };
 
+    disconnectBroadCastCall(appid, appkey, broadcast_id,voiceId, callback) {
+      /*let eventName;
+      if(that.state === 'dialing') {
+        eventName = 'cancel-call';
+      } else if(that.state === 'connected' || that.state === 'established') {
+        eventName = 'disconnect-call';
+      } else if(that.state === 'incomingcall') {
+        eventName = 'reject-call'
+      }*/
 
+      that.socket.emit('disconnect-broadcast-call', {appid : appid, appkey : appkey, broadcast_id , voice_id : voiceId}, (response) => {
+        console.log("Received response", JSON.stringify(response));
+        callback(response);
+      });
+      //that.state = 'online';
+    };
     /*
     * Once the room is connected, send a room connected information to the server.
     */

@@ -18,7 +18,7 @@ var config = {};
 
 config.SERVER_API_SERVER = {
   host:
-    "api.enablex.io" /* Server API URL. Change it to connect to right EnableX Cluster */,
+    "api-qa.enablex.io" /* Server API URL. Change it to connect to right EnableX Cluster */,
   port: "443",
   /* Server API Port. */
 };
@@ -28,9 +28,9 @@ config.APP_KEY = ""; 	/* APP KEY - Use APP KEY received from Enablex */
 
 
 config.cert = {
-  key: "", // Your KEY file path
-  crt: "", // Your CRT file path
-  caBundle: null,
+  key: "/opt/vcloudx/etc/sslcerts/vcloudx.key", // Your KEY file path
+  crt: "/opt/vcloudx/etc/sslcerts/vcloudx.crt", // Your CRT file path
+  //caBundle: /opt/vcloudx/etc/sslcerts/vcloudx.ca-bundle,
 };
 
 // SERVICE ACCESSIBILITY

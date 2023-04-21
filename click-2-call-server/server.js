@@ -10,27 +10,35 @@ var path = require('path');
 var bodyParser = require('body-parser');
 var cookieParser = require('cookie-parser');
 var ngrok = require('ngrok');
-var room = require("./room"); // Import Room Management Service
+//var room = require("./room"); // Import Room Management Service
 
 function registerEventHandlers(socket) {
     socket.on('user-logged-in', onuserlogin.bind(socket));
+    socket.on('outbound-call', onoutboundcall.bind(socket));
+    socket.on('play-ivr', onivrplay.bind(socket));
+    socket.on('join-room',onroomjoin.bind(socket));
     socket.on('connect-call', onconnectcall.bind(socket));
+    socket.on('broadcast-call',onbroadcastcall.bind(socket));
+    socket.on('play-broadcast-ivr',onbroadcastivrplay.bind(socket));
+    socket.on('connect-broadcast-call',onconnectbroadcastcall.bind(socket));
+    socket.on('disconnect-broadcast-call',ondisconnectbroadcastcall.bind(socket));
     socket.on('cancel-call', oncancelcall.bind(socket));
     socket.on('reject-call', onrejectcall.bind(socket));
     socket.on('accept-call', onacceptcall.bind(socket));
     socket.on('disconnect-call', ondisconnectcall.bind(socket));
-    socket.on('room-connected', onroomconnected.bind(socket));
+    /*socket.on('room-connected', onroomconnected.bind(socket));
 		socket.on('hold-call', onholdcall.bind(socket));
 		socket.on('resume-call', onresumecall.bind(socket));
     socket.on('transfer-call',ontransfercall.bind(socket));
 		socket.on('disconnect', ondisconnect.bind(socket));
+    */
 };
 
 
 var users = new Map();
 var calls = new Map();
 var agentMap = new Map();
-var roomMap = new Map();
+//var roomMap = new Map();
 var hostName = 'api-qa.enablex.io';
 var port = 443;
 var url = '';
@@ -39,6 +47,7 @@ var options = {
   key: fs.readFileSync(config.cert.key).toString(),
   cert: fs.readFileSync(config.cert.crt).toString(),
 };
+
 if (config.cert.caBundle) {
   options.ca = [];
   for (var ca in config.cert.caBundle) {
@@ -84,7 +93,7 @@ app.post("/events", (req, res, next) => {
 
 var onuserlogin = function(data, callback) {
     console.log('Socket ' + this.id +  'Received incoming request' + JSON.stringify(data));
-		let room = data.rooms.split(",");
+    let room = data.rooms.split(",");
     if(users.get(this.id) === undefined) {
       users.set(this.id, {'client_id':this.id, 'phone':data.phone, 'room':room, 'name':data.name , 'type': data.type, 'socket':this});
     	//agentStatusMap.set(this.id,
@@ -100,51 +109,254 @@ var onuserlogin = function(data, callback) {
 };
 
 
-const makeOutboundCall = function(callData, callback) {
-    console.log("Initiating a call to " + callData.to); 
-    console.log(" Event URL" + url); 
-    var postData = JSON.stringify({
-        "name": config.app_name,
-        "owner_ref": "XYZ",
-        "to": callData.to,
-        "from": callData.from,
-        "event_url": url
-    });
-
-    console.log("PostData " + postData);
-    makeVoiceAPICall('POST', '/voice/v1/call', postData, function(response, error) {  
-		console.log("Make Call Response " + response); 
+const makeOutboundCall = function(data, callback) {
+  console.log(`APPID ${data.appid} APPKEY ${data.appkey} EventURL ${url}`); 
+  let callData = data;
+  callData.call_param.event_url = url;
+  console.log(`Call Data ${JSON.stringify(callData.call_param)}`);
+  var postData = JSON.stringify(callData.call_param);
+  console.log("PostData " + postData);
+  makeVoiceAPICall('POST', '/voice/v1/call', data.appid , data.appkey , postData, function(response, error) {  
+    console.log("Make Call Response " + response); 
     if(response) {
-        let msg = JSON.parse(response);
-        if(msg.state === 'initiated') {
-        	console.log("client: " + callData.client_id + " Call Initiation to " + callData.to + "initiated");
-						calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to, 'room':callData.room, 'state':msg.state});
-        		sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'phone':callData.from, 'to':callData.to, 'room':callData.room, 'state':msg.state});
-				} else {
+      let msg = JSON.parse(response);
+      if(msg.state === 'initiated') {
+        console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+        calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+        callback('success')
+      } else {
         //Send call failed response to client.
-        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'phone':callData.from, 'to':callData.to, 'room':callData.room, 'state':msg.state});
-        }
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'phone':callData.from, 'to':callData.to, 'state':msg.state});
+        callback('fail')
+      }
     } else {
-        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'phone':callData.from, 'to':callData.to, 'room':callData.room, 'state':'failed'});
+      sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'phone':callData.from, 'to':callData.to, 'state':'failed'});
+      callback('fail')
     }
   });
 };
 
 
 var onconnectcall = function(data, callback) {
-    console.log("Disconnect Call Response " + data.voice_id);
+    console.log(`Socket ${this.id} recieved connect request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
     let user = users.get(this.id);
-    let callData = {};
-    callData.from = data.from;
-    callData.to = data.to;
-    callData.room = data.room;
-    callData.client_id = this.id;
-    console.log("Data being sent as " + JSON.stringify(callData));
-    makeOutboundCall(callData, (response) => {
-        callback(response);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(data.connect_param)}`);
+    var postData = JSON.stringify(data.connect_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/call/${callData.voice_id}/connect`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("connect call response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.playstate === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.state});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.state});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id,'state' : 'failed'});
+      }
     });
 };
 
+var onconnectbroadcastcall = function(data, callback) {
+    console.log(`Socket ${this.id} recieved broadcast connect request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(data.connect_param)}`);
+    var postData = JSON.stringify(data.connect_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/broadcast/${data.broadcast_id}/call/${callData.voice_id}/connect`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("connect call response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.playstate === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {broadcast_id : msg.broadcast_id,'voice_id':msg.voice_id, 'state':msg.state});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'broadcast_id' : msg.broadcast_id,'voice_id':msg.voice_id, 'state':msg.state});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {broadcast_id : msg.broadcast_id,'voice_id':msg.voice_id,'state' : 'failed'});
+      }
+    });
+};
+
+
+var onoutboundcall = function(data, callback) {
+    console.log(`Socket ${this.id} recieved outbound call request ${JSON.stringify(data)}`);
+    //callback('success');
+    users.set(this.id, {'client_id':this.id, 'socket':this});
+    //let user = users.get(this.id);
+    data.client_id = this.id;
+    makeOutboundCall(data, (response) => {
+      callback(response);
+    });
+};
+
+var onivrplay = function(data, callback) {
+    console.log(`Socket ${this.id} recieved ivr play request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(callData.play_param)}`);
+    var postData = JSON.stringify(callData.play_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/call/${callData.voice_id}/play`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("play IVR response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.playstate === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'playstate':msg.playstate});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'playstate':msg.playstate});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id,'playstate' : 'failed'});
+      }
+    });
+     /*makeOutboundCall(data, (response) => {
+      callback(response);
+    });*/
+};
+
+var onbroadcastivrplay = function(data, callback) {
+    console.log(`Socket ${this.id} recieved broadcast ivr play request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(callData.play_param)}`);
+    var postData = JSON.stringify(callData.play_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/broadcast/${callData.broadcast_id}/call/${callData.voice_id}/play`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("play IVR response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.playstate === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {broadcast_id: msg.broadcast_id, 'voice_id':msg.voice_id, 'playstate':msg.playstate});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {broadcast_id: msg.broadcast_id,'voice_id':msg.voice_id, 'playstate':msg.playstate});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {broadcast_id: msg.broadcast_id,'voice_id':msg.voice_id,'playstate' : 'failed'});
+      }
+    });
+};
+
+var onroomjoin = function(data, callback) {
+    console.log(`Socket ${this.id} recieved room join request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(callData.play_param)}`);
+    //var postData = JSON.stringify(callData.play_param);
+    //console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/room/${callData.room_id}/call/${callData.voice_id}/join`, data.appid , data.appkey , '', function(response, error) {
+      console.log("join room response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.state === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.playstate});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.playstate});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id,'state' : 'failed'});
+      }
+    });
+     /*makeOutboundCall(data, (response) => {
+      callback(response);
+    });*/
+};
+
+
+var onconnectcall = function(data, callback) {
+    console.log(`Socket ${this.id} recieved connect call request ${JSON.stringify(data)}`);
+    //callback('success');
+    //users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    console.log(`Call Data ${JSON.stringify(callData.connect_param)}`);
+    var postData = JSON.stringify(callData.connect_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('PUT', `/voice/v1/call/${callData.voice_id}/connect`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("play IVR response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.state === 'initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          //calls.set(msg.voice_id, {'voice_id':msg.voice_id, 'client_id':callData.client_id, 'phone':callData.from, 'to':callData.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.state});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id, 'state':msg.state});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'voice_id':msg.voice_id,'state' : 'failed'});
+      }
+    });
+     /*makeOutboundCall(data, (response) => {
+      callback(response);
+    });*/
+};
+
+var onbroadcastcall = function (data , callback) {
+    console.log(`Socket ${this.id} recieved broadcast call request ${JSON.stringify(data)}`);
+    callback('success');
+    users.set(this.id, {'client_id':this.id, 'socket':this});
+    let user = users.get(this.id);
+    let callData = data;
+    data.client_id = this.id;
+    callData.broadcast_param.event_url = url
+    console.log(`Call Data ${JSON.stringify(callData.broadcast_param)}`);
+    var postData = JSON.stringify(callData.broadcast_param);
+    console.log("PostData " + postData);
+    makeVoiceAPICall('POST', `/voice/v1/broadcast`, data.appid , data.appkey , postData, function(response, error) {
+      console.log("make broadcast call response" + response);
+      if(response) {
+        let msg = JSON.parse(response);
+        if(msg.state === 'broadcastcall_initiated') {
+          //console.log("client: " + callData.client_id + " Call Initiation to " + callData.call_param.to + "initiated");
+          calls.set(msg.broadcast_id, {broadcast_id: msg.broadcast_id,'voice_id':msg.voice_id, 'client_id':callData.client_id, 'from':msg.from, 'to':msg.to,'state':msg.state});
+	  calls.set(msg.voice_id, {broadcast_id: msg.broadcast_id,'voice_id':msg.voice_id, 'client_id':callData.client_id, 'from':msg.from, 'to':msg.to,'state':msg.state});
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'broadcast_id': msg.broadcast_id , voice_id : msg.voice_id, from: msg.from,to:msg.to,'state':msg.state});
+        } else {
+          //Send call failed response to client.
+          sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'broadcast_id': msg.broadcast_id ,'voice_id':msg.voice_id, 'state':msg.state});
+        }
+      } else {
+        sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'broadcast_id': msg.broadcast_id ,'voice_id':msg.voice_id,'playstate' : 'failed'});
+      }
+    });
+}
 
 /* Function to Hangup Call */
 var oncancelcall = function(data, callback) {
@@ -221,7 +433,8 @@ var onrejectcall = function(data, callback) {
 };
 
 var ondisconnectcall = function(data, callback) {
-    console.log("Disconnect Call Response " + data.voice_id);
+    console.log("Disconnect Call Request " + JSON.stringify(data));
+    disconnectCall(data);
     callback({'result':0, 'msg':'success'}); 
 };
 
@@ -237,101 +450,50 @@ var ondisconnect = function() {
 };
 
 var voiceeventhandler = function(voiceevent) {
-    let voice_id = voiceevent.voice_id;
-    let call = calls.get(voice_id);
-		console.log("voiceevent :" + JSON.stringify(voiceevent));
-    console.log(" VoiceId: " + voice_id + " Call Details: " + JSON.stringify(call));
-    let user = undefined;
-		let roomId = undefined;
-		if(call !== undefined) {		
-			user = users.get(call.client_id);
-		} else {
-			if(voiceevent.state !== 'bridge_disconnected') {
-				let agentId = getFreeAgent(voiceevent.to) 
-				if(agentId === undefined || agentId === null) {
-					console.log("["+voice_id+"] No Agents are Available , disconnect the call");
-					disconnectCall(voice_id);
-					return;
-				} else {
-					console.log("Agent Available " + agentId);
-					user = users.get(agentId);
-					roomId = getAgentsFreeRoom(user);
-					console.log("Free Room Available for : " + agentId + " is " + roomId);		
-				}
-			}
-		}
-		console.log("user : " + user);
-    if(voiceevent.state) {
-        if(voiceevent.state === 'incomingcall') {
-             console.log("["+voice_id+"] Received incoming call from " + voiceevent.from);
-             if(user !== undefined) {
-                 calls.set(voiceevent.voice_id, {'voice_id':voiceevent.voice_id,'client_id':user.client_id, 'phone':voiceevent.to, 'to':voiceevent.from, 'room':roomId, 'state':'incomingcall'});
-                 sendMessage(users.get(user.client_id).socket, 'callstateevent', {'voice_id':voice_id, 'phone':voiceevent.to, 'to':voiceevent.from, 'room':roomId, 'state':'incomingcall'});
-              } else {
-                 console.error("["+voice_id+"] Phone number not found for incoming call" + voiceevent.from);
-                 disconnectCall(voice_id)
-              }
-        } else if(voiceevent.state && voiceevent.state === 'connected') {
-              console.log("[" + voice_id + "] Outbound Call is connected");
-              console.log("[" + voice_id + "] Requesting token for the room " + call.room);
-              call.state = 'connected';
-              room.getToken({name: users.get(call.client_id).user,
-                  role: "participant",
-                  user_ref: "Click2Call",
-                  name:user.name,
-                  roomId: call.room,
-              }, function (token) {
-        if (token && token.result !== undefined && token.result === 0) {
-          console.log("Token Got for User, Token: ");
-          console.log(token);
-          sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, state:'connected', 'token':token});
-          let userRooms = users.get(call.client_id).room;
-          console.log("Validate Room ID " + call.room + "UserRoom : " + userRooms);
-					if(userRooms.includes(call.room) === true) {
-						console.log("Valid Room ID : " + call.room);
-						placeVoiceCallToRoom(call);
-					} else {
-						 sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, 'phone':call.phone, 'to':call.to, 'room':call.room, 'state':'failed'});
-             disconnectCall(msg.voice_id)
-					}
-        } else {
-          console.log(voice_id + " Failed to get Token for the room  " + call.room);
-          console.log(token);
-					//sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, state:'failed', 'token':token});
-				  //placeVoiceCallToRoom(call);
-          //disconnectCall(voice_id)
-					let userRooms = users.get(call.client_id).room;
-          console.log("Validate Room ID " + call.room + "UserRoom : " + userRooms);
-        	if(userRooms.includes(call.room) === true ) {//&& userRooms.phone === call.phone ) {
-            console.log("Valid Room ID : " + call.room);
-            placeVoiceCallToRoom(call);
-          } else {
-             console.log("Invalid Room ID");
-						 sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, 'phone':call.phone, 'to':call.to, 'room':call.room, 'state':'failed'});
-             disconnectCall(voice_id)
-          }
-				}});
-    } else if(voiceevent.state === 'bridged') {
-      console.log("[" + voice_id + "] Outbound Call is Bridged");
-    } else if(voiceevent.state === 'disconnected') {
-      console.log("[" + voice_id + "] Call Disconnected");
-      call.state = 'disconnected';
-      sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, 'state':'disconnected', 'room': call.room});
-			roomMap.delete(call.room); 
-			let json = {
-        'state' : "Available",
-        'phone' : call.phone
-      }
-      console.log("Set Agent Status Available" + JSON.stringify(json));
-			agentMap.set(call.client_id,json);
-      calls.delete(voice_id);
-    } else if(voiceevent.state === 'joined') {
-      call.state = 'room_connected';
-      sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, state:'room_connected'});
+    let voice_id = voiceevent.broadcast_id ? voiceevent.broadcast_id : voiceevent.voice_id;
+    let call = calls.get(voiceevent.broadcast_id ? voiceevent.broadcast_id : voiceevent.voice_id);
+    if(call === undefined) {
+      call = calls.get(voiceevent.voice_id);
     }
-  } else if(voiceevent.playstate) {
+    console.log("voiceevent :" + JSON.stringify(voiceevent));
+    console.log(" VoiceId: " + (voiceevent.broadcast_id ? voiceevent.broadcast_id : voiceevent.voice_id) + " Call Details: " + JSON.stringify(call));
+    let user = undefined;
+    if(call !== undefined) {		
+      user = users.get(call.client_id);
+    } 
+    console.log("user : " + user);
+    if(voiceevent.state) {
+      if(voiceevent.state === 'incomingcall') {
+        console.log("["+voice_id+"] Received incoming call from " + voiceevent.from);
+        if(user !== undefined) {
+          calls.set(voiceevent.broadcast_id ? voiceevent.broadcast_id : voiceevent.voice_id, {broadcast_id : voiceevent.broadcast_id, 'voice_id':voiceevent.voice_id,'client_id':user.client_id, 'phone':voiceevent.to, 'to':voiceevent.from, 'room':roomId, 'state':'incomingcall'});
+           sendMessage(users.get(user.client_id).socket, 'callstateevent', {broadcast_id: voiceevent.broadcast_id,'voice_id':voiceevent.voice_id, 'phone':voiceevent.to, 'to':voiceevent.from, 'room':roomId, 'state':'incomingcall'});
+        } else {
+          console.error("["+voice_id+"] Phone number not found for incoming call" + voiceevent.from);
+          disconnectCall(voiceevent.broadcast_id)
+        }
+      } else if(voiceevent.state && voiceevent.state === 'connected') {
+        console.log("[" +  voiceevent.voice_id + "] Outbound Call is connected");
+        sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id:voiceevent.broadcast_id,'voice_id':voiceevent.voice_id, from : voiceevent.from , to : voiceevent.to,state:'connected'})
+        call.state = 'connected';
+      } else if(voiceevent.state === 'bridged' || voiceevent.state === 'bridging' || voiceevent.state === 'bridge_disconnected') {
+        console.log("[" +  voiceevent.voice_id + "] Outbound Call is Bridged");
+        sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id : voiceevent.broadcast_id, 'voice_id':voiceevent.voice_id, from : voiceevent.from , to : voiceevent.to, state:voiceevent.state});
+      } else if(voiceevent.state === 'broadcastcall_complete'){
+           sendMessage(users.get(callData.client_id).socket, 'callstateevent', {'broadcast_id': msg.broadcast_id , from: msg.from , broadcast_call_info: msg.broadcast_call_info,'state':msg.state});
+      } else if(voiceevent.state === 'disconnected') {
+        console.log("[" + voice_id + "] Call Disconnected");
+        //call.state = 'disconnected';
+        //sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id: voiceevent.broadcast_id,'voice_id':voiceevent.voice_id, from : voiceevent.from , to : voiceevent.to, 'state':'disconnected'});
+        calls.delete(voice_id);
+      } else if(voiceevent.state === 'joined') {
+        call.state = 'room_connected';
+        sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id:voiceevent.broadcast_id,'voice_id':voiceevent.voice_id,from : voiceevent.from , to : voiceevent.to,  state:'room_connected'});
+     }
+    } else if(voiceevent.playstate) {
      //This is due to the some play prompt configured 
-     console.log("[" + voice_id + "] Play finished");
+     sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id: voiceevent.broadcast_id,'voice_id':voiceevent.voice_id, from : voiceevent.from , to : voiceevent.to, 'playstate':voiceevent.playstate,'prompt_ref':voiceevent.prompt_ref,'digit' : voiceevent.digit});
+     console.log("[" +  voiceevent.voice_id + "] Play finished");
   }
 }
 
@@ -356,16 +518,17 @@ const sendMessage = function (socket, type, data) {
 };
 
 
-var makeVoiceAPICall = function(method, path, data, callback) {
+var makeVoiceAPICall = function(method, path, appid, appkey , data, callback) {
+    console.log(`makeVoiceAPICall : ${method} ${path} ${appid} ${appkey} ${data}`)
     let options = {
         host: hostName,
         port: port,
         path: path,
         method: method,//'POST',
         headers: {
-            'Authorization': 'Basic ' + new Buffer(config.APP_ID + ':' + config.APP_KEY).toString('base64'),
+            'Authorization': 'Basic ' + new Buffer(appid + ':' + appkey).toString('base64'),
             'Content-Type': 'application/json',
-            'Content-Length': (data)?data.length:0
+            'Content-Length': (data)? data.length : 0
         }   
     };
     req = https.request(options, function(res) {
@@ -552,17 +715,17 @@ var getAgentsFreeRoom  = function(user) {
 }
 
 /* Function to Hangup Call */
-var disconnectCall = function(voice_id) {
-    let call = calls.get(voice_id);
+var disconnectCall = function(disconnectdata) {
+    let call = calls.get(disconnectdata.voice_id);
     if(call) { 
-    let path = '/voice/v1/call/' + voice_id;
+    let path = '/voice/v1/call/' + disconnectdata.voice_id;
     let options = {
-        host: config.host,
-        port: config.port,
+        host: hostName,
+        port: port,
         path: path,
         method: 'DELETE',
         headers: {
-            'Authorization': 'Basic ' + new Buffer(config.app_id + ':' + config.app_key).toString('base64'),
+            'Authorization': 'Basic ' + new Buffer(disconnectdata.appid + ':' + disconnectdata.appkey).toString('base64'),
             'Content-Type': 'application/json',
         }   
     };
@@ -573,7 +736,7 @@ var disconnectCall = function(voice_id) {
         });
 
         res.on('end', function() {
-            callback(body);
+            //callback(body);
         });
 
         res.on('error', function(e) {
@@ -581,8 +744,49 @@ var disconnectCall = function(voice_id) {
         });
     });
     req.end();
-    sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id':voice_id, 'state':'disconnected', 'room': call.room}); 
+    sendMessage(users.get(call.client_id).socket, 'callstateevent', {'voice_id': disconnectdata.voice_id, 'state':'disconnected'}); 
   } else {
     console.error("Call Not found");
   }
 }
+var ondisconnectbroadcastcall = function(data, callback) {
+    console.log("broadcast disconnect Call Request " + JSON.stringify(data));
+    disconnectBroadCastCall(data);
+    callback({'result':0, 'msg':'success'});
+};
+
+var disconnectBroadCastCall = function(disconnectdata) {
+    let call = calls.get(disconnectdata.broadcast_id);
+    if(call) {
+    let path = `/voice/v1/broadcast/${disconnectdata.broadcast_id}/call/${disconnectdata.voice_id}`;
+    let options = {
+        host: hostName,
+        port: port,
+        path: path,
+        method: 'DELETE',
+        headers: {
+            'Authorization': 'Basic ' + new Buffer(disconnectdata.appid + ':' + disconnectdata.appkey).toString('base64'),
+            'Content-Type': 'application/json',
+        }
+    };
+    req = https.request(options, function(res) {
+        var body = "";
+        res.on('data', function(data) {
+            body += data;
+        });
+
+        res.on('end', function() {
+            //callback(body);
+        });
+
+        res.on('error', function(e) {
+            console.log("Got error: " + e.message);
+        });
+    });
+    req.end();
+    sendMessage(users.get(call.client_id).socket, 'callstateevent', {broadcast_id: disconnectdata.broadcast_id, 'voice_id': disconnectdata.voice_id, 'state':'disconnected'});
+  } else {
+    console.error("Call Not found");
+  }
+}
+
